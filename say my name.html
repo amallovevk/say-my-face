@@ -1,0 +1,132 @@
+import 'dart:async';
+import 'dart:typed_data';
+import 'package:flutter/material.dart';
+import 'package:camera/camera.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:flutter/foundation.dart';
+
+
+late List<CameraDescription> cameras;
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  cameras = await availableCameras();
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Say My Face',
+      theme: ThemeData(primarySwatch: Colors.purple),
+      home: MoodMirror(),
+    );
+  }
+}
+
+class MoodMirror extends StatefulWidget {
+  @override
+  _MoodMirrorState createState() => _MoodMirrorState();
+}
+
+class _MoodMirrorState extends State<MoodMirror> {
+  late CameraController controller;
+  final FlutterTts tts = FlutterTts();
+  final FaceDetector _faceDetector = FaceDetector(
+    options: FaceDetectorOptions(performanceMode: FaceDetectorMode.fast),
+  );
+
+  bool _isDetecting = false;
+  List<String> funnyComments = [
+    "You look like you just saw your bank balance!",
+    "Is that your serious face?",
+    "You'd make a great emoji!",
+    "Wow, your face is doing... something!",
+    "Smile! Or not. Either way, I’m judging!",
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _initCamera();
+  }
+
+  Future<void> _initCamera() async {
+    await Permission.camera.request();
+    await Permission.microphone.request();
+
+    final frontCamera = cameras.firstWhere(
+            (cam) => cam.lensDirection == CameraLensDirection.front);
+
+    controller = CameraController(frontCamera, ResolutionPreset.medium);
+    await controller.initialize();
+
+    controller.startImageStream((CameraImage image) {
+      if (_isDetecting) return;
+      _isDetecting = true;
+
+      _processCameraImage(image);
+    });
+
+    setState(() {});
+  }
+
+  void _processCameraImage(CameraImage image) async {
+    final WriteBuffer buffer = WriteBuffer();
+    for (Plane plane in image.planes) {
+      buffer.putUint8List(plane.bytes);
+    }
+    final bytes = buffer.done().buffer.asUint8List();
+
+    final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
+
+    final inputImage = InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: imageSize,
+        rotation: InputImageRotation.rotation0deg,
+        format: InputImageFormat.nv21,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      ),
+    );
+
+    final List<Face> faces = await _faceDetector.processImage(inputImage);
+
+    if (faces.isNotEmpty) {
+      _sayRandomFunnyThing();
+    }
+
+    _isDetecting = false;
+  }
+
+  Future<void> _sayRandomFunnyThing() async {
+    final randomComment =
+        (funnyComments..shuffle()).first;
+    await tts.speak(randomComment);
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    _faceDetector.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!controller.value.isInitialized) {
+      return Scaffold(
+        appBar: AppBar(title: Text("Say My Face")),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: Text("Say My Face")),
+      body: CameraPreview(controller),
+    );
+  }
+}
